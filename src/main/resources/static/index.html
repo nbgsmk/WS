@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>Headless App Dashboard</title>
+	<!-- Modern lightweight ESM versions of Stomp to avoid legacy script tags -->
+	<script type="importmap">
+		{ "imports": { "@stomp/stompjs": "https://jspm.io" } }
+	</script>
+	<style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f4f6f9; color: #333; }
+        .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 500px; }
+        .progress-container { width: 100%; background: #eee; border-radius: 4px; margin-top: 15px; display: none; }
+        .progress-bar { width: 0%; height: 20px; background: #28a745; text-align: center; color: white; line-height: 20px; border-radius: 4px; transition: width 0.2s; font-size: 12px; }
+        button { background: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        button:hover { background: #0056b3; }
+	</style>
+</head>
+<body>
+
+<div class="card">
+	<h2>Headless System Monitor</h2>
+	<p>Status: <strong id="connection-status" style="color: red;">Disconnected from Server</strong></p>
+
+	<input type="text" id="taskName" value="Docker Data Sync Task" style="padding: 8px; width: 250px; border: 1px solid #ccc; border-radius: 4px; margin-right: 5px;">
+	<button id="triggerBtn" disabled>Trigger Job</button>
+
+	<div id="jobDetails" style="margin-top: 20px; display: none;">
+		<div><strong>Active Job:</strong> <span id="lblJobId"></span></div>
+		<div><strong>Task Target:</strong> <span id="lblTaskName"></span></div>
+		<div><strong>Status:</strong> <span id="lblStatus"></span></div>
+
+		<div class="progress-container" id="progressBarWrapper">
+			<div class="progress-bar" id="progressBar">0%</div>
+		</div>
+	</div>
+</div>
+
+<script type="module">
+	import { Client } from '@stomp/stompjs';
+
+	let currentSubscription = null;
+
+	// 1. Establish WebSocket connection connection loop
+	const wsScheme = window.location.protocol === "https:" ? "wss://" : "ws://";
+	const client = new Client({
+		brokerURL: `${wsScheme}${window.location.host}/ws-dashboard`,
+		onConnect: () => {
+			document.getElementById('connection-status').innerText = "Connected & Active";
+			document.getElementById('connection-status').style.color = "green";
+			document.getElementById('triggerBtn').disabled = false;
+		},
+		onDisconnect: () => {
+			document.getElementById('connection-status').innerText = "Disconnected";
+			document.getElementById('connection-status').style.color = "red";
+			document.getElementById('triggerBtn').disabled = true;
+		}
+	});
+	client.activate();
+
+	// 2. Trigger the job via REST API, then dynamically subscribe to the socket stream channel
+	document.getElementById('triggerBtn').onclick = async () => {
+		const taskName = document.getElementById('taskName').value;
+
+		const response = await fetch(`/api/jobs/start?name=${encodeURIComponent(taskName)}`, { method: 'POST' });
+		const data = await response.json();
+
+		document.getElementById('jobDetails').style.display = 'block';
+		document.getElementById('progressBarWrapper').style.display = 'block';
+		document.getElementById('lblJobId').innerText = data.jobId;
+		document.getElementById('lblTaskName').innerText = taskName;
+		document.getElementById('lblStatus').innerText = "Spawning thread...";
+
+		// If listening to a previous job channel, unsubscribe first
+		if (currentSubscription) currentSubscription.unsubscribe();
+
+		// Subscribe to the unique runtime channel for this specific job execution
+		currentSubscription = client.subscribe(`/topic/progress/${data.jobId}`, (message) => {
+			const payload = JSON.parse(message.body);
+
+			document.getElementById('lblStatus').innerText = payload.status;
+			document.getElementById('progressBar').style.width = payload.progress + '%';
+			document.getElementById('progressBar').innerText = payload.progress + '%';
+
+			if(payload.status === "COMPLETED") {
+				document.getElementById('lblStatus').style.color = 'green';
+				currentSubscription.unsubscribe();
+				currentSubscription = null;
+			}
+		});
+	};
+</script>
+</body>
+</html>
