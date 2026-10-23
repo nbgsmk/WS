@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class NativeWebServer implements Closeable {
+public class WebUiProxy implements Closeable {
 
 	private final int listenPort;
 	private final String targetHost;
@@ -19,7 +19,7 @@ public class NativeWebServer implements Closeable {
 	private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 	private volatile boolean running = false;
 
-	public NativeWebServer(int listenPort, String targetHost, int targetPort) {
+	public WebUiProxy(int listenPort, String targetHost, int targetPort) {
 		this.listenPort = listenPort;
 		this.targetHost = targetHost;
 		this.targetPort = targetPort;
@@ -144,13 +144,22 @@ public class NativeWebServer implements Closeable {
 		return serverSocket != null ? serverSocket.getLocalPort() : listenPort;
 	}
 
-	public static void main(String[] args) throws IOException {
+public static void main(String[] args) throws IOException {
 		int listenPort = args.length > 0 ? Integer.parseInt(args[0]) : 5000;
 		String targetHost = args.length > 1 ? args[1] : "localhost";
 		int targetPort = args.length > 2 ? Integer.parseInt(args[2]) : 7999;
 
-		NativeWebServer server = new NativeWebServer(listenPort, targetHost, targetPort);
+		WebUiProxy server = new WebUiProxy(listenPort, targetHost, targetPort);
 		server.start();
+
+		BGS bg1 = new BGS("BG1", 0);
+		BGS bg2 = new BGS("BG2", 0);
+
+		bg1.start();
+		bg2.start();
+
+		System.out.println(bg1.getListenPort());
+		System.out.println(bg2.getListenPort());
 
 		Runtime.getRuntime().addShutdownHook(new Thread(server::close));
 

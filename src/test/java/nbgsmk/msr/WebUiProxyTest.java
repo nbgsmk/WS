@@ -15,19 +15,18 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-public class NativeWebServerTest {
+public class WebUiProxyTest {
 
-	private NativeWebServer proxyServer;
+	private WebUiProxy proxyServer;
 	private int proxyPort;
 
 	@BeforeEach
 	void setUp() throws Exception {
 		// Use port 0 to bind to any free port for testing
-		proxyServer = new NativeWebServer(0, "localhost", 7999);
+		proxyServer = new WebUiProxy(0, "localhost", 7999);
 		proxyServer.start();
 		proxyPort = proxyServer.getListenPort();
 	}
@@ -169,7 +168,7 @@ public class NativeWebServerTest {
 	@Test
 	void testTargetUnreachableReturns502() throws Exception {
 		// Create a proxy with an unreachable port
-		try (NativeWebServer badProxy = new NativeWebServer(0, "localhost", 59999)) {
+		try (WebUiProxy badProxy = new WebUiProxy(0, "localhost", 59999)) {
 			badProxy.start();
 			int badProxyPort = badProxy.getListenPort();
 
