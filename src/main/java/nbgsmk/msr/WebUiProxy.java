@@ -152,14 +152,14 @@ public static void main(String[] args) throws IOException {
 		WebUiProxy server = new WebUiProxy(listenPort, targetHost, targetPort);
 		server.start();
 
-		BGS bg1 = new BGS("BG1", 0);
-		BGS bg2 = new BGS("BG2", 0);
+		ModuleAgent m1 = new ModuleAgent("M1", 0);
+		ModuleAgent m2 = new ModuleAgent("M2", 0);
 
-		bg1.start();
-		bg2.start();
+		m1.start();
+		m2.start();
 
-		System.out.println(bg1.getListenPort());
-		System.out.println(bg2.getListenPort());
+		System.out.println(m1.getListenPort());
+		System.out.println(m2.getListenPort());
 
 		Runtime.getRuntime().addShutdownHook(new Thread(server::close));
 

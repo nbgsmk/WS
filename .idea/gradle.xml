@@ -5,13 +5,13 @@
     <option name="linkedExternalProjectsSettings">
       <GradleProjectSettings>
         <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="gradleJvm" value="jbr-25" />
         <option name="modules">
           <set>
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/BG" />
           </set>
         </option>
-        <option name="myGradleHome" value="" />
       </GradleProjectSettings>
     </option>
   </component>

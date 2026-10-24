@@ -18,8 +18,10 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
-public class BGS implements Closeable {
+public class ModuleAgent implements Closeable {
 
 	private static final int MAX_HEADER_BYTES = 16 * 1024;
 	private static final int MAX_BODY_BYTES = 1024 * 1024;
@@ -27,14 +29,19 @@ public class BGS implements Closeable {
 
 	private final String instanceName;
 	private final int listenPort;
+	private final boolean autoStartWorker;
+	private final Worker worker;
 	private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 	private final Set<Socket> activeSockets = ConcurrentHashMap.newKeySet();
 
-	private volatile State state = State.STOPPED;
 	private volatile boolean running;
 	private ServerSocket serverSocket;
 
-	public BGS(String instanceName, int listenPort) {
+	public ModuleAgent(String instanceName, int listenPort) {
+		this(instanceName, listenPort, true);
+	}
+
+	public ModuleAgent(String instanceName, int listenPort, boolean autoStartWorker) {
 		if (instanceName == null || instanceName.isBlank()) {
 			throw new IllegalArgumentException("instanceName must not be blank");
 		}
@@ -44,6 +51,8 @@ public class BGS implements Closeable {
 
 		this.instanceName = instanceName;
 		this.listenPort = listenPort;
+		this.autoStartWorker = autoStartWorker;
+		this.worker = new Worker(instanceName);
 	}
 
 	public synchronized void start() throws IOException {
@@ -55,7 +64,7 @@ public class BGS implements Closeable {
 		running = true;
 
 		System.out.println("============================================================");
-		System.out.println(" BGS instance: " + instanceName);
+		System.out.println(" ModuleAgent instance: " + instanceName);
 		System.out.println(" Listening on: http://localhost:" + getListenPort());
 		System.out.println(" Status:       GET  /status");
 		System.out.println(" Start:        POST /start");
@@ -64,8 +73,12 @@ public class BGS implements Closeable {
 		System.out.println("============================================================");
 
 		Thread.ofVirtual()
-				.name("bgs-" + instanceName + "-accept-loop")
+				.name("ModuleAgent-" + instanceName + "-accept-loop")
 				.start(this::acceptLoop);
+
+		if (autoStartWorker) {
+			worker.start();
+		}
 	}
 
 	public int getListenPort() {
@@ -78,7 +91,7 @@ public class BGS implements Closeable {
 	}
 
 	public boolean isRunning() {
-		return state == State.RUNNING;
+		return worker.isRunning();
 	}
 
 	private void acceptLoop() {
@@ -126,19 +139,31 @@ public class BGS implements Closeable {
 		String path = request.pathWithoutQuery();
 
 		if ("GET".equals(request.method()) && "/status".equals(path)) {
-			writeJsonResponse(output, 200, "{\"state\":\"" + state.jsonValue + "\"}");
+			writeJsonResponse(output, 200, statusJson());
 			return;
 		}
 
 		if ("POST".equals(request.method()) && "/start".equals(path)) {
-			state = State.RUNNING;
-			writeJsonResponse(output, 200, "{\"state\":\"running\"}");
+			worker.start();
+			writeJsonResponse(output, 202, "{\"state\":\"" + worker.state().jsonValue() + "\"}");
 			return;
 		}
 
 		if ("POST".equals(request.method()) && "/stop".equals(path)) {
-			state = State.STOPPED;
-			writeJsonResponse(output, 200, "{\"state\":\"stopped\"}");
+			worker.stop();
+			writeJsonResponse(output, 202, "{\"state\":\"" + worker.state().jsonValue() + "\"}");
+			return;
+		}
+
+		if ("POST".equals(request.method()) && "/pause".equals(path)) {
+			worker.pause();
+			writeJsonResponse(output, 202, "{\"state\":\"" + worker.state().jsonValue() + "\"}");
+			return;
+		}
+
+		if ("POST".equals(request.method()) && "/resume".equals(path)) {
+			worker.resume();
+			writeJsonResponse(output, 202, "{\"state\":\"" + worker.state().jsonValue() + "\"}");
 			return;
 		}
 
@@ -161,20 +186,68 @@ public class BGS implements Closeable {
 	}
 
 	private void writeSseResponse(OutputStream output) throws IOException {
-		byte[] event = ("event: status\n"
-				+ "data: {\"state\":\"" + state.jsonValue + "\"}\n\n")
-				.getBytes(StandardCharsets.UTF_8);
-
 		String headers = "HTTP/1.1 200 OK\r\n"
 				+ "Content-Type: text/event-stream\r\n"
 				+ "Cache-Control: no-cache\r\n"
-				+ "Connection: close\r\n"
-				+ "Content-Length: " + event.length + "\r\n"
+				+ "Connection: keep-alive\r\n"
+				+ "Transfer-Encoding: chunked\r\n"
 				+ "\r\n";
 
 		output.write(headers.getBytes(StandardCharsets.US_ASCII));
-		output.write(event);
 		output.flush();
+
+		LinkedBlockingQueue<Worker.Status> updates = new LinkedBlockingQueue<>();
+		AutoCloseable registration = worker.addStatusListener(updates::offer);
+		try {
+			while (running) {
+				Worker.Status status = updates.poll(15, TimeUnit.SECONDS);
+				if (status == null) {
+					writeSseComment(output, "heartbeat");
+				} else {
+					writeSseEvent(output, "status", statusJson(status));
+				}
+				output.flush();
+			}
+		} catch (InterruptedException exception) {
+			Thread.currentThread().interrupt();
+		} finally {
+			try {
+				registration.close();
+			} catch (Exception ignored) {
+			}
+		}
+	}
+
+	private String statusJson() {
+		return statusJson(worker.status());
+	}
+
+	private String statusJson(Worker.Status status) {
+		return "{\"name\":\"" + escapeJson(status.name())
+				+ "\",\"state\":\"" + status.state().jsonValue()
+				+ "\",\"iteration\":" + status.iteration()
+				+ ",\"lastActivityEpochMillis\":" + status.lastActivityEpochMillis()
+				+ ",\"lastError\":" + (status.lastError() == null ? "null" : "\"" + escapeJson(status.lastError()) + "\"")
+				+ "}";
+	}
+
+	private void writeSseEvent(OutputStream output, String eventName, String data) throws IOException {
+		writeSseChunk(output, "event: " + eventName + "\ndata: " + data + "\n\n");
+	}
+
+	private void writeSseComment(OutputStream output, String comment) throws IOException {
+		writeSseChunk(output, ": " + comment + "\n\n");
+	}
+
+	private void writeSseChunk(OutputStream output, String value) throws IOException {
+		byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+		output.write((Integer.toHexString(bytes.length) + "\r\n").getBytes(StandardCharsets.US_ASCII));
+		output.write(bytes);
+		output.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+	}
+
+	private static String escapeJson(String value) {
+		return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
 	}
 
 	private void writeWebSocketHtmlPage(OutputStream output) throws IOException {
@@ -493,6 +566,7 @@ public class BGS implements Closeable {
 	@Override
 	public synchronized void close() {
 		running = false;
+		worker.close();
 
 		for (Socket socket : activeSockets) {
 			closeQuietly(socket);
@@ -513,17 +587,6 @@ public class BGS implements Closeable {
 		try {
 			socket.close();
 		} catch (IOException ignored) {
-		}
-	}
-
-	private enum State {
-		RUNNING("running"),
-		STOPPED("stopped");
-
-		private final String jsonValue;
-
-		State(String jsonValue) {
-			this.jsonValue = jsonValue;
 		}
 	}
 
