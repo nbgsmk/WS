@@ -12,6 +12,7 @@ import java.util.function.Consumer;
 public final class Worker implements AutoCloseable {
 
 	private final String name;
+	private final GenericTask task;
 	private final AtomicBoolean stopRequested = new AtomicBoolean();
 	private final AtomicBoolean pauseRequested = new AtomicBoolean();
 	private final Object pauseMonitor = new Object();
@@ -23,10 +24,23 @@ public final class Worker implements AutoCloseable {
 	private volatile String lastError;
 
 	public Worker(String name) {
+		this(name, () -> {
+			while (!Thread.currentThread().isInterrupted()) {
+				System.out.println("[" + name + "] dummy stream listener is running");
+				Thread.sleep(1_000);
+			}
+		});
+	}
+
+	public Worker(String name, GenericTask task) {
 		if (name == null || name.isBlank()) {
 			throw new IllegalArgumentException("name must not be blank");
 		}
+		if (task == null) {
+			throw new IllegalArgumentException("task must not be null");
+		}
 		this.name = name;
+		this.task = task;
 	}
 
 	public synchronized void start() {
@@ -47,6 +61,7 @@ public final class Worker implements AutoCloseable {
 	public void pause() {
 		if (state == State.RUNNING) {
 			pauseRequested.set(true);
+			task.pause();
 			state = State.PAUSED;
 			publishStatus();
 		}
@@ -58,6 +73,7 @@ public final class Worker implements AutoCloseable {
 		}
 
 		pauseRequested.set(false);
+		task.resume();
 		synchronized (pauseMonitor) {
 			pauseMonitor.notifyAll();
 		}
@@ -105,16 +121,13 @@ public final class Worker implements AutoCloseable {
 
 	private void runLoop() {
 		try {
-			while (!stopRequested.get()) {
-				waitIfPaused();
-				if (stopRequested.get()) {
-					break;
-				}
-				iteration++;
-				lastActivityEpochMillis = System.currentTimeMillis();
-				System.out.println("[" + name + "] dummy work iteration " + iteration);
+			iteration++;
+			lastActivityEpochMillis = System.currentTimeMillis();
+			publishStatus();
+			task.run();
+			if (!stopRequested.get() && state != State.FAILED) {
+				state = State.STOPPED;
 				publishStatus();
-				Thread.sleep(1_000);
 			}
 		} catch (InterruptedException exception) {
 			Thread.currentThread().interrupt();
@@ -124,7 +137,7 @@ public final class Worker implements AutoCloseable {
 				publishStatus();
 				System.err.println("[" + name + "] worker interrupted unexpectedly");
 			}
-		} catch (RuntimeException exception) {
+		} catch (Exception exception) {
 			state = State.FAILED;
 			lastError = exception.toString();
 			publishStatus();
@@ -145,14 +158,6 @@ public final class Worker implements AutoCloseable {
 				listener.accept(currentStatus);
 			} catch (RuntimeException exception) {
 				System.err.println("[" + name + "] status listener failed: " + exception.getMessage());
-			}
-		}
-	}
-
-	private void waitIfPaused() throws InterruptedException {
-		synchronized (pauseMonitor) {
-			while (pauseRequested.get() && !stopRequested.get()) {
-				pauseMonitor.wait();
 			}
 		}
 	}

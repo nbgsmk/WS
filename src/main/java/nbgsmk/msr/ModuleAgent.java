@@ -38,10 +38,18 @@ public class ModuleAgent implements Closeable {
 	private ServerSocket serverSocket;
 
 	public ModuleAgent(String instanceName, int listenPort) {
-		this(instanceName, listenPort, true);
+		this(instanceName, listenPort, true, () -> Thread.sleep(1_000));
 	}
 
 	public ModuleAgent(String instanceName, int listenPort, boolean autoStartWorker) {
+		this(instanceName, listenPort, autoStartWorker, () -> Thread.sleep(1_000));
+	}
+
+	public ModuleAgent(String instanceName, int listenPort, GenericTask task) {
+		this(instanceName, listenPort, true, task);
+	}
+
+	public ModuleAgent(String instanceName, int listenPort, boolean autoStartWorker, GenericTask task) {
 		if (instanceName == null || instanceName.isBlank()) {
 			throw new IllegalArgumentException("instanceName must not be blank");
 		}
@@ -52,7 +60,7 @@ public class ModuleAgent implements Closeable {
 		this.instanceName = instanceName;
 		this.listenPort = listenPort;
 		this.autoStartWorker = autoStartWorker;
-		this.worker = new Worker(instanceName);
+		this.worker = new Worker(instanceName, task);
 	}
 
 	public synchronized void start() throws IOException {

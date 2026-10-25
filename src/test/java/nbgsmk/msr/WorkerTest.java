@@ -62,4 +62,41 @@ class WorkerTest {
 			assertEquals(Worker.State.STOPPED, worker.state());
 		}
 	}
+
+	@Test
+	void executesInjectedTask() throws InterruptedException {
+		var executions = new java.util.concurrent.atomic.AtomicInteger();
+
+		try (Worker worker = new Worker("injected", () -> {
+			executions.incrementAndGet();
+			try {
+				Thread.sleep(Long.MAX_VALUE);
+			} catch (InterruptedException exception) {
+				Thread.currentThread().interrupt();
+			}
+		})) {
+			worker.start();
+
+			long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+			while (executions.get() == 0 && System.nanoTime() < deadline) {
+				Thread.sleep(10);
+			}
+
+			assertTrue(executions.get() > 0);
+		}
+	}
+
+	@Test
+	void taskReturningNormallyStopsTheWorker() {
+		try (Worker worker = new Worker("finite", () -> { })) {
+			worker.start();
+
+			long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+			while (worker.state() == Worker.State.RUNNING && System.nanoTime() < deadline) {
+				Thread.onSpinWait();
+			}
+
+			assertEquals(Worker.State.STOPPED, worker.state());
+		}
+	}
 }

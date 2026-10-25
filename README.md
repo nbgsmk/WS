@@ -54,6 +54,42 @@ The worker is designed to run without a browser or any connected client.
 - last activity timestamp
 - last error
 
+### Injecting real work
+
+`GenericTask` represents one long-lived operation. The worker calls `run()` once and keeps that operation alive until it returns, fails, or is interrupted by `stop()`. A task can listen to a web stream, consume MQTT messages, poll an external source, or run another continuous service loop.
+
+Inject a task directly into a worker:
+
+```java
+GenericTask task = () -> {
+	while (!Thread.currentThread().isInterrupted()) {
+		// Listen for stream data and process it continuously.
+	}
+};
+
+Worker worker = new Worker("processor", task);
+worker.start();
+```
+
+Or inject it into a module agent. The worker starts automatically by default:
+
+```java
+ModuleAgent agent = new ModuleAgent("processor", 8080, () -> {
+	while (!Thread.currentThread().isInterrupted()) {
+		// Listen to the web, MQTT, or another permanent data source.
+	}
+});
+agent.start();
+```
+
+For manual worker startup, use the four-argument constructor:
+
+```java
+ModuleAgent agent = new ModuleAgent("processor", 8080, false, task);
+```
+
+Exceptions thrown by a task move the worker to `FAILED` and are exposed through `Worker.Status.lastError`. A task should respond to interruption so that `stop()` can shut it down promptly. Tasks needing custom pause behavior can override `pause()` and `resume()`.
+
 ### `ModuleAgent`
 
 `ModuleAgent` runs a simple HTTP server and controls one worker instance. The two-argument constructor automatically starts the worker after the HTTP server binds successfully:
@@ -112,19 +148,18 @@ The current development environment can locate the bundled runtime, but its Grad
 
 - `ModuleAgent`: per-container HTTP control and status service.
 - `Worker`: lifecycle runner for one long-lived background job.
-- `GenericTask`: possible future interface for the actual unit of work; it should not replace `Worker`.
+- `GenericTask`: injected interface for one long-lived module operation.
 - `ControlGateway`: planned central service aggregating multiple agents for the browser.
 - `WebUiProxy`: experimental transparent proxy, not the user-facing UI.
 
 ## Next steps
 
-1. Extract the dummy loop behind an injectable work abstraction, such as `GenericTask` or `WorkProcessor`, so `Worker` can run real module-specific processing.
-2. Define safe processing boundaries so cooperative pause finishes the current item before entering `PAUSED`.
-3. Add a real module status model and persistent event handling suitable for MQTT, database, and processing jobs.
-4. Improve the HTTP implementation or replace it with a standard HTTP framework once the API grows.
-5. Add a central `ControlGateway` that discovers/configures multiple `ModuleAgent` instances and aggregates status and logs.
-6. Add the browser dashboard after the agent API is stable.
-7. Add Docker Compose deployment for the modules while leaving container restart behavior to Docker.
+1. Define safe processing boundaries so cooperative pause finishes the current item before entering `PAUSED`.
+2. Add a real module status model and persistent event handling suitable for MQTT, database, and processing jobs.
+3. Improve the HTTP implementation or replace it with a standard HTTP framework once the API grows.
+4. Add a central `ControlGateway` that discovers/configures multiple `ModuleAgent` instances and aggregates status and logs.
+5. Add the browser dashboard after the agent API is stable.
+6. Add Docker Compose deployment for the modules while leaving container restart behavior to Docker.
 
 ## Important limitations
 
